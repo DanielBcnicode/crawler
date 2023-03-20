@@ -15,16 +15,18 @@ var (
 )
 
 type Crawler interface {
-	Run(command CrawlerCommand) ([]interface{}, error)
+	Run(command CrawlerCommand) (interface{}, error)
 }
 
 type HttpCrawler struct{}
 
-func NewHttpCrawler() (*HttpCrawler, error) {
+func NewHttpCrawler() (*HttpCrawler, error) { // error is not necessary by now
 	return &HttpCrawler{}, nil
 }
 
-func (c *HttpCrawler) Run(command CrawlerCommand) ([]interface{}, error) {
+func (c *HttpCrawler) Run(command CrawlerCommand) (interface{}, error) {
+	var returnData map[string]int = map[string]int{}
+
 	ctx, closeFunc := context.WithTimeout(context.Background(), 20*time.Second)
 	defer closeFunc()
 	req, err := http.NewRequestWithContext(ctx, "GET", command.url.String(), nil)
@@ -52,7 +54,8 @@ func (c *HttpCrawler) Run(command CrawlerCommand) ([]interface{}, error) {
 		tokenType := tokenizer.Next()
 		switch {
 		case tokenType == html.ErrorToken:
-			return nil, tokenizer.Err()
+			fmt.Printf("Urls a Parsear : %d\n", len(returnData))
+			return returnData, tokenizer.Err()
 		case tokenType == html.StartTagToken:
 			token := tokenizer.Token()
 			if token.Data == "a" {
@@ -69,6 +72,8 @@ func (c *HttpCrawler) Run(command CrawlerCommand) ([]interface{}, error) {
 						if !strings.HasPrefix(u, "http") {
 							continue
 						}
+						// Check if the url has been crawled
+						returnData[u] = 0
 						fmt.Printf("Anchor ..... %+v\n", u)
 					}
 				}
@@ -76,15 +81,4 @@ func (c *HttpCrawler) Run(command CrawlerCommand) ([]interface{}, error) {
 		}
 
 	}
-
-	// Begin of the channels test
-	// 1 - Put in the cue to Process the url and deep
-	// Listener cue Pending
-	// 1 - Get data from URL
-	// 2 - Extract new URLs
-	// 3 - Send data to object repository
-	// 4 - Increase the deep
-	//
-
-	return nil, nil
 }
