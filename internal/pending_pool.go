@@ -28,11 +28,12 @@ type BasicPendingPoolCrawler interface {
 type htmlCrawlingPendingPull struct {
 	PendingChannel chan HtmlCrawlingPendingAddress
 	StopChannel    chan int
+	ProcessChannel chan PoolItem
 	WaitGroup      *sync.WaitGroup
 	BaseHost       string
-	pending        map[string]PoolItem
+	pending        []PoolItem
 	visited        map[string]PoolItem
-	sync.Mutex
+	sync.RWMutex
 }
 
 func NewHtmlCrawler(
@@ -46,14 +47,27 @@ func NewHtmlCrawler(
 		StopChannel:    StopChannel,
 		WaitGroup:      WaitGroup,
 		BaseHost:       BaseHost,
+		pending:        []PoolItem{},
+		visited:        map[string]PoolItem{},
+		ProcessChannel: make(chan PoolItem),
 	}
 }
 func (p *htmlCrawlingPendingPull) Execute() {
+	fmt.Println("Function: Execute()")
 	wg := sync.WaitGroup{}
-	wg.Add(1)
+	wg.Add(2)
 	go p.pendingHandler(&wg)
-	for i := 0; i < 10; i++ {
-
+	go p.processPending(&wg)
+	for i := 0; i < 30; i++ {
+		// go routines to get pending url and process it
+		go func() {
+			for {
+				select {
+				case pc := <-p.ProcessChannel:
+					p.Craw(pc.Link, &wg)
+				}
+			}
+		}()
 	}
 	wg.Wait()
 
@@ -62,83 +76,113 @@ func (p *htmlCrawlingPendingPull) Execute() {
 		case <-p.StopChannel:
 			//p.WaitGroup.Done()
 			return
-		case pendingUrl, ok := <-p.PendingChannel:
-			if !ok {
-				fmt.Println("Pichaaaaaa esta cerrado")
+		}
+	}
+}
 
-			}
-			u, err := url.Parse(pendingUrl.Link)
-			if err != nil {
-				//log err
-				fmt.Println(err)
-				continue
-			}
-			if u.Host != p.BaseHost {
-				//log err
-				fmt.Printf("Host different!!! %s, must be %s\n", u.Host, p.BaseHost)
-				continue
-			}
-			fmt.Printf("URL: %+v\n", pendingUrl)
+func (p *htmlCrawlingPendingPull) lenPending() int {
+	l := 0
+	p.RLock()
+	l = len(p.pending)
+	p.RUnlock()
+	return l
+}
 
+func (p *htmlCrawlingPendingPull) processPending(wg *sync.WaitGroup) {
+	fmt.Println("Function: processPending()")
+	var first PoolItem
+	toNotify := false
+	for {
+		time.Sleep(10 * time.Millisecond)
+		if p.lenPending() > 0 {
 			p.Lock()
-			p.pending[pendingUrl.Link] = PoolItem{
-				Link:     pendingUrl.Link,
-				Ancestor: pendingUrl.Ancestor,
-				Visited:  false,
-			}
+			first, p.pending = p.pending[0], p.pending[1:]
+			p.visited[first.Link] = first
+			toNotify = true
 			p.Unlock()
+		}
 
-			//wg.Add(1)
-			//go p.Craw(pendingUrl.Link, &wg)
-			//wg.Wait()
+		if toNotify {
+			p.ProcessChannel <- first
 		}
 	}
 }
 
 func (p *htmlCrawlingPendingPull) pendingHandler(wg *sync.WaitGroup) {
+	fmt.Println("Function: pendingHandler()")
 	for {
 		select {
 		case <-p.StopChannel:
 			//p.WaitGroup.Done()
 			return
-		case _ = <-time.After(4 * time.Second): //Check if there are some pending
+		case _ = <-time.After(10 * time.Second): //Check if there are some pending
 			if len(p.pending) == 0 {
+				wg.Done()
 				wg.Done()
 				return
 			}
 		case pendingUrl, ok := <-p.PendingChannel:
+			fmt.Println("Chan: PendingChannel")
 			if !ok {
-				fmt.Println("Pichaaaaaa esta cerrado")
-
+				fmt.Println("Error pending channel closed")
+				wg.Done()
+				return
 			}
 			u, err := url.Parse(pendingUrl.Link)
 			if err != nil {
 				//log err
 				fmt.Println(err)
-				continue
+				break
 			}
 			if u.Host != p.BaseHost {
 				//log err
 				fmt.Printf("Host different!!! %s, must be %s\n", u.Host, p.BaseHost)
-				continue
+				break
+			}
+
+			//Check if the URL is queued or has been processed
+			if p.isUrlProcessed(pendingUrl.Link) {
+				break
 			}
 			fmt.Printf("URL: %+v\n", pendingUrl)
-
 			p.Lock()
-			p.pending[pendingUrl.Link] = PoolItem{
+			//p.pending[pendingUrl.Link] = PoolItem{
+			//	Link:     pendingUrl.Link,
+			//	Ancestor: pendingUrl.Ancestor,
+			//	Visited:  false,
+			//}
+			p.pending = append(p.pending, PoolItem{
 				Link:     pendingUrl.Link,
 				Ancestor: pendingUrl.Ancestor,
 				Visited:  false,
-			}
+			})
+			fmt.Println("Adding pending ", pendingUrl.Link)
 			p.Unlock()
 		}
 	}
 }
 
-func (p *htmlCrawlingPendingPull) Craw(uri string, wg *sync.WaitGroup) {
+func (p *htmlCrawlingPendingPull) isUrlProcessed(url string) bool {
+	p.RLock()
+	defer p.RUnlock()
+
+	for _, item := range p.pending {
+		if item.Link == url {
+			return true
+		}
+	}
+	_, ok := p.visited[url]
+	if ok {
+		return true
+	}
+
+	return false
+}
+func (p *htmlCrawlingPendingPull) Craw(uri string, _ *sync.WaitGroup) {
+	fmt.Println("Function: Craw() ", uri)
 	u, err := url.Parse(uri)
 	if err != nil { // Check error and log
-		wg.Done()
+		//wg.Done()
 		return
 	}
 
@@ -154,11 +198,18 @@ func (p *htmlCrawlingPendingPull) Craw(uri string, wg *sync.WaitGroup) {
 	}
 	urls, err := serv.Run(cmd)
 	//Add logit before send to pending channel
-	for uu, _ := range urls.(map[string]int) {
-		fmt.Printf("Try to enqueue %s\n", uu)
-		//pa := HtmlCrawlingPendingAddress{Link: uu}
-		//p.PendingChannel <- pa
+	urlsData, ok := urls.(map[string]int)
+	if len(urlsData) == 0 || !ok {
+		return
 	}
-	wg.Done()
+	for uu, _ := range urls.(map[string]int) {
+		if p.isUrlProcessed(uu) {
+			continue
+		}
+		fmt.Printf("Try to enqueue %s\n", uu)
+		pa := HtmlCrawlingPendingAddress{Link: uu, Ancestor: uri}
+		p.PendingChannel <- pa
+	}
+	//wg.Done()
 
 }
