@@ -14,9 +14,14 @@ var (
 )
 
 type HtmlContentExtractor interface {
+	Run(uri string) (realURL string, data io.Reader, err error)
 }
 
 type WebContentExtract struct {
+}
+
+func NewWebContentExtrat() *WebContentExtract {
+	return &WebContentExtract{}
 }
 
 func (c *WebContentExtract) Run(uri string) (realURL string, data io.Reader, err error) {
@@ -24,7 +29,7 @@ func (c *WebContentExtract) Run(uri string) (realURL string, data io.Reader, err
 	if err != nil {
 		return "", nil, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(time.Second*20))
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
 	defer cancel()
 	req = req.WithContext(ctx)
 	client := http.DefaultClient

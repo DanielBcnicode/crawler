@@ -31,6 +31,7 @@ type BasicPendingPoolCrawler interface {
 	Execute(wg *sync.WaitGroup, url string, ancestor string)
 }
 type htmlCrawlingPendingPull struct {
+	sync.Mutex
 	PendingChannel     chan HtmlCrawlingPendingAddress
 	StopPendingChannel chan int
 	StopChannel        chan int
@@ -39,16 +40,18 @@ type htmlCrawlingPendingPull struct {
 	BaseHost           string
 	pending            []PoolItem
 	visited            map[string]PoolItem
-	sync.RWMutex
+	crawler            Crawler
 }
 
 func NewHtmlCrawler(
+	Crawler Crawler,
 	PendingChannel chan HtmlCrawlingPendingAddress,
 	StopChannel chan int,
 	WaitGroup *sync.WaitGroup,
 	BaseHost string,
 ) BasicPendingPoolCrawler {
 	return &htmlCrawlingPendingPull{
+		crawler:            Crawler,
 		PendingChannel:     PendingChannel,
 		StopChannel:        StopChannel,
 		WaitGroup:          WaitGroup,
@@ -81,49 +84,6 @@ func (p *htmlCrawlingPendingPull) Execute(wg *sync.WaitGroup, url string, ancest
 
 	p.echoTreeResults()
 	wg.Done()
-}
-
-func (p *htmlCrawlingPendingPull) echoTreeResults() {
-	root, err := p.rootFromVisited()
-	if err != nil {
-		fmt.Println("No results found")
-		return
-	}
-	checkMap := map[string]bool{}
-	p.echoResult(root.Link, 0, checkMap)
-}
-
-func (p *htmlCrawlingPendingPull) echoResult(uri string, indent int, checkMap map[string]bool) {
-	current, ok := p.visited[uri]
-	if !ok || checkMap[uri] == true {
-		return
-	}
-	checkMap[uri] = true
-
-	si := strings.Repeat("-", (indent)*2)
-	fmt.Printf("%s %s :\n", si, current.Link)
-	si = strings.Repeat("-", (indent+1)*2)
-	for _, child := range current.Children {
-		fmt.Printf("%s %s\n", si, child)
-	}
-	for _, child := range current.Children {
-		p.echoResult(child, indent, checkMap)
-	}
-}
-
-func (p *htmlCrawlingPendingPull) rootFromVisited() (PoolItem, error) {
-	for _, item := range p.visited {
-		if item.Ancestor == ROOT {
-			return item, nil
-		}
-	}
-	return PoolItem{}, ErrorRootNotFound
-}
-
-func (p *htmlCrawlingPendingPull) lenPending() int {
-	p.Lock()
-	defer p.Unlock()
-	return len(p.pending)
 }
 
 func (p *htmlCrawlingPendingPull) processPending(wg *sync.WaitGroup) {
@@ -191,22 +151,6 @@ func (p *htmlCrawlingPendingPull) pendingHandler(wg *sync.WaitGroup) {
 	}
 }
 
-func (p *htmlCrawlingPendingPull) isUrlProcessed(url string) bool {
-	p.Lock()
-	defer p.Unlock()
-
-	for _, item := range p.pending {
-		if item.Link == url {
-			return true
-		}
-	}
-	_, ok := p.visited[url]
-	if ok {
-		return true
-	}
-
-	return false
-}
 func (p *htmlCrawlingPendingPull) Craw(uri string, ancestor string, _ *sync.WaitGroup) {
 	fmt.Println("Function: Craw() ", uri)
 	u, err := url.Parse(uri)
@@ -220,12 +164,8 @@ func (p *htmlCrawlingPendingPull) Craw(uri string, ancestor string, _ *sync.Wait
 		fmt.Println(err)
 
 	}
-	serv, err := NewHttpCrawler()
-	if err != nil {
-		fmt.Println(err)
 
-	}
-	urls, realUrl, err := serv.Run(cmd)
+	urls, realUrl, err := p.crawler.Run(cmd)
 	if err != nil {
 		//we must to requeue
 		pa := HtmlCrawlingPendingAddress{Link: uri, Ancestor: ancestor}
@@ -261,6 +201,66 @@ func (p *htmlCrawlingPendingPull) Craw(uri string, ancestor string, _ *sync.Wait
 		p.PendingChannel <- pa
 	}
 
+}
+
+func (p *htmlCrawlingPendingPull) echoTreeResults() {
+	root, err := p.rootFromVisited()
+	if err != nil {
+		fmt.Println("No results found")
+		return
+	}
+	checkMap := map[string]bool{}
+	p.echoResult(root.Link, 0, checkMap)
+}
+
+func (p *htmlCrawlingPendingPull) echoResult(uri string, indent int, checkMap map[string]bool) {
+	current, ok := p.visited[uri]
+	if !ok || checkMap[uri] == true {
+		return
+	}
+	checkMap[uri] = true
+
+	si := strings.Repeat("-", (indent)*2)
+	fmt.Printf("%s %s :\n", si, current.Link)
+	si = strings.Repeat("-", (indent+1)*2)
+	for _, child := range current.Children {
+		fmt.Printf("%s %s\n", si, child)
+	}
+	for _, child := range current.Children {
+		p.echoResult(child, indent, checkMap)
+	}
+}
+
+func (p *htmlCrawlingPendingPull) rootFromVisited() (PoolItem, error) {
+	for _, item := range p.visited {
+		if item.Ancestor == ROOT {
+			return item, nil
+		}
+	}
+	return PoolItem{}, ErrorRootNotFound
+}
+
+func (p *htmlCrawlingPendingPull) lenPending() int {
+	p.Lock()
+	defer p.Unlock()
+	return len(p.pending)
+}
+
+func (p *htmlCrawlingPendingPull) isUrlProcessed(url string) bool {
+	p.Lock()
+	defer p.Unlock()
+
+	for _, item := range p.pending {
+		if item.Link == url {
+			return true
+		}
+	}
+	_, ok := p.visited[url]
+	if ok {
+		return true
+	}
+
+	return false
 }
 
 func urlsWithSameDomain(originalUrl string, urls map[string]int) []string {

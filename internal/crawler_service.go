@@ -1,13 +1,10 @@
 package internal
 
 import (
-	"context"
 	"errors"
 	"golang.org/x/net/html"
-	"net/http"
 	"net/url"
 	"strings"
-	"time"
 )
 
 const (
@@ -22,37 +19,26 @@ type Crawler interface {
 	Run(command CrawlerCommand) (map[string]int, string, error)
 }
 
-type HttpCrawler struct{}
+type HttpCrawler struct {
+	Extractor HtmlContentExtractor
+}
 
-func NewHttpCrawler() (*HttpCrawler, error) { // error is not necessary by now
-	return &HttpCrawler{}, nil
+func NewHttpCrawler(extractor HtmlContentExtractor) *HttpCrawler { // error is not necessary by now
+	return &HttpCrawler{
+		Extractor: extractor,
+	}
 }
 
 // Run the crawler in the CrawlerCommand url, returns a map[string]int with the url crawled,
 // the realUrl visited (can be redirected) and error
 func (c *HttpCrawler) Run(command CrawlerCommand) (map[string]int, string, error) {
 	returnData := map[string]int{}
-
-	ctx, closeFunc := context.WithTimeout(context.Background(), 20*time.Second)
-	defer closeFunc()
-	req, err := http.NewRequestWithContext(ctx, "GET", command.url.String(), nil)
+	realURL, body, err := c.Extractor.Run(command.url.String())
 	if err != nil {
-		return nil, "", nil
-	}
-	client := http.DefaultClient
-	res, err := client.Do(req)
-	if err != nil {
-		println(err.Error())
 		return nil, "", err
 	}
-	if res.StatusCode != http.StatusOK {
-		return nil, "", err
-	}
-	realURL := res.Request.URL.String()
-	defer func() { _ = res.Body.Close() }()
-
 	//Tokenizer
-	tokenizer := html.NewTokenizer(res.Body)
+	tokenizer := html.NewTokenizer(body)
 	for {
 		tokenType := tokenizer.Next()
 		switch {

@@ -34,7 +34,10 @@ func main() {
 	wg := sync.WaitGroup{}
 	pendingChan := make(chan internal.HtmlCrawlingPendingAddress)
 	stopChan := make(chan int)
-	pendingService := internal.NewHtmlCrawler(pendingChan, stopChan, &wg, uri.Host)
+	serv := internal.NewHttpCrawler(
+		internal.NewWebContentExtrat(),
+	)
+	pendingService := internal.NewHtmlCrawler(serv, pendingChan, stopChan, &wg, uri.Host)
 
 	wg.Add(1)
 
