@@ -6,9 +6,7 @@ import (
 )
 
 type CrawlerCommand struct {
-	url     url.URL
-	maxDeep uint64
-	deep    uint64
+	url url.URL
 }
 
 var (
@@ -16,18 +14,8 @@ var (
 	ErrorMaxDeepCanNotBeZero = errors.New("the current deep is greater than the maximum allowed")
 )
 
-func NewCrawlerCommand(url url.URL, maxDeep uint64, deep uint64) (CrawlerCommand, error) {
-	if maxDeep == 0 {
-		return CrawlerCommand{}, ErrorMaxDeepCanNotBeZero
-	}
-
-	if deep > maxDeep {
-		return CrawlerCommand{}, ErrorDeepTooHigh
-	}
-
+func NewCrawlerCommand(url url.URL) (CrawlerCommand, error) {
 	return CrawlerCommand{
-		url:     url,
-		maxDeep: maxDeep,
-		deep:    deep,
+		url: url,
 	}, nil
 }

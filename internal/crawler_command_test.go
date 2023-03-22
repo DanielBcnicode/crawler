@@ -8,14 +8,11 @@ import (
 
 func TestNewCrawlerCommand(t *testing.T) {
 	var (
-		urlTest, _        = url.ParseRequestURI("http://www.host.com")
-		maxDeep    uint64 = 2
+		urlTest, _ = url.ParseRequestURI("http://www.host.com")
 	)
 
 	type args struct {
-		url     url.URL
-		maxDeep uint64
-		deep    uint64
+		url url.URL
 	}
 	tests := []struct {
 		name    string
@@ -27,44 +24,18 @@ func TestNewCrawlerCommand(t *testing.T) {
 		{
 			name: "good parameters in constructor",
 			args: args{
-				url:     *urlTest,
-				maxDeep: maxDeep,
-				deep:    1,
+				url: *urlTest,
 			},
 			want: CrawlerCommand{
-				url:     *urlTest,
-				maxDeep: maxDeep,
-				deep:    1,
+				url: *urlTest,
 			},
 			wantErr: false,
 			err:     nil,
 		},
-		{
-			name: "maxDeep is zero",
-			args: args{
-				url:     *urlTest,
-				maxDeep: 0,
-				deep:    1,
-			},
-			want:    CrawlerCommand{},
-			wantErr: true,
-			err:     ErrorMaxDeepCanNotBeZero,
-		},
-		{
-			name: "deep is greater than maxDeep",
-			args: args{
-				url:     *urlTest,
-				maxDeep: 2,
-				deep:    4,
-			},
-			want:    CrawlerCommand{},
-			wantErr: true,
-			err:     ErrorDeepTooHigh,
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := NewCrawlerCommand(tt.args.url, tt.args.maxDeep, tt.args.deep)
+			got, err := NewCrawlerCommand(tt.args.url)
 			if ((err != nil) != tt.wantErr) || (err != tt.err) {
 				t.Errorf("NewCrawlerCommand() error = %v, wantErr %v", err, tt.wantErr)
 				return
