@@ -10,84 +10,95 @@ import (
 )
 
 /*
-This file implements a pull of url to be crawled,
-
+This file implements a queue to process the crawling of one url [in the command]
+This implementation only follows urls with the same subdomain.
+It has one queue of links (type PoolItem) and a map[string]PoolItem with the visited
+urls.
 */
 
+// ErrorRootNotFound root link is not found in the visited map.
 var ErrorRootNotFound = errors.New("root visited not found")
 
+// HtmlCrawlingPendingAddress type used in the pending channel
 type HtmlCrawlingPendingAddress struct {
 	Link     string
 	Ancestor string
 }
+
+// PoolItem holds the crawled url data
 type PoolItem struct {
-	Link      string
-	Ancestor  string
-	Children  []string
-	Visited   bool
-	VisitData time.Time
+	link      string
+	ancestor  string
+	children  []string
+	visited   bool
+	visitDate time.Time
 }
+
+// CrawlerProcessor Interface of the main crawler processor
 type CrawlerProcessor interface {
 	Run(wg *sync.WaitGroup, url string, ancestor string)
-	VisitedUrls() map[string]PoolItem
+	VisitedUrls() map[string]PoolItem //This function is only for testing purpose
+	Response() interface{}
 }
+
+// htmlCrawlerProcessor Current crawler processor implementation
 type htmlCrawlerProcessor struct {
 	sync.Mutex
-	PendingChannel     chan HtmlCrawlingPendingAddress
-	StopPendingChannel chan int
-	StopChannel        chan int
-	ProcessChannel     chan PoolItem
-	WaitGroup          *sync.WaitGroup
-	BaseHost           string
+	pendingChannel     chan HtmlCrawlingPendingAddress
+	stopPendingChannel chan int
+	processChannel     chan PoolItem
+	waitGroup          *sync.WaitGroup
+	baseHost           string
 	pending            []PoolItem
 	visited            map[string]PoolItem
 	crawler            Crawler
 }
 
+// NewHtmlCrawler constructor
 func NewHtmlCrawler(
 	Crawler Crawler,
 	PendingChannel chan HtmlCrawlingPendingAddress,
-	StopChannel chan int,
 	WaitGroup *sync.WaitGroup,
 	BaseHost string,
-) CrawlerProcessor {
+) *htmlCrawlerProcessor {
 	return &htmlCrawlerProcessor{
 		crawler:            Crawler,
-		PendingChannel:     PendingChannel,
-		StopChannel:        StopChannel,
-		WaitGroup:          WaitGroup,
-		BaseHost:           BaseHost,
+		pendingChannel:     PendingChannel,
+		waitGroup:          WaitGroup,
+		baseHost:           BaseHost,
 		pending:            []PoolItem{},
 		visited:            map[string]PoolItem{},
-		ProcessChannel:     make(chan PoolItem),
-		StopPendingChannel: make(chan int),
+		processChannel:     make(chan PoolItem),
+		stopPendingChannel: make(chan int),
 	}
 }
+
+// Run main crawler processor function
 func (p *htmlCrawlerProcessor) Run(wg *sync.WaitGroup, url string, ancestor string) {
 	lwg := sync.WaitGroup{}
 	lwg.Add(2)
-	go p.pendingHandler(&lwg)
-	go p.processPending(&lwg)
-	for i := 0; i < 300; i++ {
-		// go routines to get pending url and process it
+	go p.processPendingItem(&lwg)
+	go p.processPendingItemsQueue(&lwg)
+	for i := 0; i < 300; i++ { // This number can be set as parameter
 		go func() {
 			for {
 				select {
-				case pc := <-p.ProcessChannel:
-					p.Craw(pc.Link, pc.Ancestor, &lwg)
+				case pc := <-p.processChannel:
+					p.Crawl(pc.link, pc.ancestor, &lwg)
 				}
 			}
 		}()
 	}
 
-	p.PendingChannel <- HtmlCrawlingPendingAddress{Link: url, Ancestor: ancestor}
-	lwg.Wait()
+	p.pendingChannel <- HtmlCrawlingPendingAddress{Link: url, Ancestor: ancestor}
 
-	p.echoTreeResults()
+	lwg.Wait()
 	wg.Done()
 }
 
-func (p *htmlCrawlerProcessor) processPending(wg *sync.WaitGroup) {
+// processPendingItemsQueue is a local implementation, it can be an external service
+// and use a queue service as RabbitMQ, Kafka or others.
+func (p *htmlCrawlerProcessor) processPendingItemsQueue(wg *sync.WaitGroup) {
 	var first PoolItem
 	toNotify := false
 	lastProcessedTime := time.Now()
@@ -102,25 +113,26 @@ func (p *htmlCrawlerProcessor) processPending(wg *sync.WaitGroup) {
 
 		if toNotify {
 			toNotify = false
-			p.ProcessChannel <- first
+			p.processChannel <- first
 			lastProcessedTime = time.Now()
 		}
 
 		if time.Now().Sub(lastProcessedTime) > 5*time.Second {
-			p.StopPendingChannel <- 1
+			p.stopPendingChannel <- 1
 			wg.Done()
 			return
 		}
 	}
 }
 
-func (p *htmlCrawlerProcessor) pendingHandler(wg *sync.WaitGroup) {
+// processPendingItem Add pending url to the queue if the url is not processed
+func (p *htmlCrawlerProcessor) processPendingItem(wg *sync.WaitGroup) {
 	for {
 		select {
-		case _ = <-p.StopPendingChannel:
+		case _ = <-p.stopPendingChannel:
 			wg.Done()
 			return
-		case pendingUrl, ok := <-p.PendingChannel:
+		case pendingUrl, ok := <-p.pendingChannel:
 			if !ok {
 				fmt.Println("Error pending channel closed")
 				wg.Done()
@@ -131,7 +143,7 @@ func (p *htmlCrawlerProcessor) pendingHandler(wg *sync.WaitGroup) {
 				fmt.Println(err)
 				break
 			}
-			if u.Host != p.BaseHost {
+			if u.Host != p.baseHost {
 				break
 			}
 
@@ -141,17 +153,17 @@ func (p *htmlCrawlerProcessor) pendingHandler(wg *sync.WaitGroup) {
 
 			p.Lock()
 			p.pending = append(p.pending, PoolItem{
-				Link:     pendingUrl.Link,
-				Ancestor: pendingUrl.Ancestor,
-				Visited:  false,
+				link:     pendingUrl.Link,
+				ancestor: pendingUrl.Ancestor,
+				visited:  false,
 			})
-			//fmt.Println("Adding pending ", pendingUrl.Link)
 			p.Unlock()
 		}
 	}
 }
 
-func (p *htmlCrawlerProcessor) Craw(uri string, ancestor string, _ *sync.WaitGroup) {
+// Crawl makes the url crawling and add to visited map
+func (p *htmlCrawlerProcessor) Crawl(uri string, ancestor string, _ *sync.WaitGroup) {
 	fmt.Print(".")
 	u, err := url.Parse(uri)
 	if err != nil { // Check error and log
@@ -167,25 +179,25 @@ func (p *htmlCrawlerProcessor) Craw(uri string, ancestor string, _ *sync.WaitGro
 	urls, realUrl, err := p.crawler.Run(cmd)
 	if err != nil {
 		//TODO: implement a retry system
-		//pa := HtmlCrawlingPendingAddress{Link: uri, Ancestor: ancestor}
-		//p.PendingChannel <- pa
+		//pa := HtmlCrawlingPendingAddress{link: uri, ancestor: ancestor}
+		//p.pendingChannel <- pa
 		return
 	}
 
 	children := urlsWithSameDomain(realUrl, urls)
 	//Mark url as visited
 	pi := PoolItem{
-		Link:      realUrl,
-		Ancestor:  ancestor,
-		Visited:   true,
-		Children:  children,
-		VisitData: time.Now(),
+		link:      realUrl,
+		ancestor:  ancestor,
+		visited:   true,
+		children:  children,
+		visitDate: time.Now(),
 	}
 
 	p.Lock()
-	if ancestor == ROOT {
+	if ancestor == ROOT { //HACK to prevent the url redirection only in the first url ROOT
 		ancestorUrl, _ := url.Parse(realUrl) //url confirmed previously, error never will success
-		p.BaseHost = ancestorUrl.Host
+		p.baseHost = ancestorUrl.Host
 	}
 	p.visited[realUrl] = pi
 	p.Unlock()
@@ -198,42 +210,54 @@ func (p *htmlCrawlerProcessor) Craw(uri string, ancestor string, _ *sync.WaitGro
 			continue
 		}
 		pa := HtmlCrawlingPendingAddress{Link: uu, Ancestor: realUrl}
-		p.PendingChannel <- pa
+		p.pendingChannel <- pa
 	}
 
 }
 
-func (p *htmlCrawlerProcessor) echoTreeResults() {
-	root, err := p.rootFromVisited()
+// Response prepare the crawler response, this version is a raw text
+// it can have a parameter to indicate the response format.
+func (p *htmlCrawlerProcessor) Response() interface{} {
+	root, err := p.visitedRoot()
 	if err != nil {
-		fmt.Println("No results found")
-		return
+		return "No results found"
 	}
+
 	checkMap := map[string]bool{}
-	p.echoResult(root.Link, 0, checkMap)
+	dataResult := ""
+	p.Lock()
+	p.processResponse(root.link, 0, checkMap, &dataResult)
+	p.Unlock()
+	return dataResult
 }
 
-func (p *htmlCrawlerProcessor) echoResult(uri string, indent int, checkMap map[string]bool) {
+// processResponse is a recursive function to get data for the response
+func (p *htmlCrawlerProcessor) processResponse(uri string, indent int, checkMap map[string]bool, dataResult *string) {
 	current, ok := p.visited[uri]
 	if !ok || checkMap[uri] == true {
 		return
 	}
 	checkMap[uri] = true
 
-	si := strings.Repeat("-", (indent)*2)
-	fmt.Printf("%s %s :\n", si, current.Link)
-	si = strings.Repeat("-", (indent+1)*2)
-	for _, child := range current.Children {
-		fmt.Printf("%s %s\n", si, child)
+	si := strings.Repeat(" ", (indent)*2)
+	*dataResult += fmt.Sprintf("%s %s\n", si, current.link)
+	si = strings.Repeat(" ", (indent+1)*2)
+
+	// add the children urls
+	for _, child := range current.children {
+		*dataResult += fmt.Sprintf("%s %s\n", si, child)
 	}
-	for _, child := range current.Children {
-		p.echoResult(child, indent, checkMap)
+	// process the children
+	for _, child := range current.children {
+		p.processResponse(child, indent, checkMap, dataResult)
 	}
 }
 
-func (p *htmlCrawlerProcessor) rootFromVisited() (PoolItem, error) {
+func (p *htmlCrawlerProcessor) visitedRoot() (PoolItem, error) {
+	p.Lock()
+	defer p.Unlock()
 	for _, item := range p.visited {
-		if item.Ancestor == ROOT {
+		if item.ancestor == ROOT {
 			return item, nil
 		}
 	}
@@ -251,7 +275,7 @@ func (p *htmlCrawlerProcessor) isUrlProcessed(url string) bool {
 	defer p.Unlock()
 
 	for _, item := range p.pending {
-		if item.Link == url {
+		if item.link == url {
 			return true
 		}
 	}
@@ -259,23 +283,22 @@ func (p *htmlCrawlerProcessor) isUrlProcessed(url string) bool {
 	if ok {
 		return true
 	}
-	//fmt.Println("NOT FOUND ", url)
-	//fmt.Printf("pending: %+v\n", p.pending)
-	//fmt.Printf("visited: %+v\n", p.visited)
 	return false
 }
 
 func (p *htmlCrawlerProcessor) VisitedUrls() map[string]PoolItem {
 	return p.visited
 }
+
+// urlsWithSameDomain return a slice with the url with the same HOST in the URL
 func urlsWithSameDomain(originalUrl string, urls map[string]int) []string {
-	var childUrls []string
+	var siblingUrls []string
 	if urls == nil {
-		return childUrls
+		return siblingUrls
 	}
 	ou, err := url.Parse(originalUrl)
 	if err != nil {
-		return childUrls
+		return siblingUrls
 	}
 	for uri := range urls {
 		u, err := url.Parse(uri)
@@ -283,8 +306,9 @@ func urlsWithSameDomain(originalUrl string, urls map[string]int) []string {
 			continue
 		}
 		if ou.Host == u.Host {
-			childUrls = append(childUrls, uri)
+			siblingUrls = append(siblingUrls, uri)
 		}
 	}
-	return childUrls
+
+	return siblingUrls
 }

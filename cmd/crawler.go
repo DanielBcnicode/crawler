@@ -8,16 +8,15 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"runtime/pprof"
 	"sync"
 )
 
 func main() {
-	deep := flag.Int("d", 1, "-d crawler deep level")
-	//args := flag.Args()
-
+	profileActive := flag.Bool("p", false, "-p profile activation")
 	flag.Parse()
 
-	fmt.Println("deep: ", *deep)
+	fmt.Println("Profile: ", *profileActive)
 	fmt.Println("Arguments number: ", flag.NArg())
 	fmt.Println("Args: ", flag.Arg(0))
 
@@ -26,30 +25,42 @@ func main() {
 		fmt.Println("the parameter specified is not a valid url: ", flag.Arg(0))
 		os.Exit(1)
 	}
-
 	fmt.Println("Crawling the url: ", uri)
-	fmt.Println("With protocol: ", uri.Scheme, uri.Opaque)
 
-	// This must be the core main
+	if *profileActive {
+		f, err := os.Create("crawler.prof")
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		_ = pprof.StartCPUProfile(f)
+		defer pprof.StopCPUProfile()
+	}
+
 	wg := sync.WaitGroup{}
 	pendingChan := make(chan internal.HtmlCrawlingPendingAddress)
-	stopChan := make(chan int)
 	serv := internal.NewHttpCrawler(
 		internal.NewWebContentExtrat(),
 	)
-	pendingService := internal.NewHtmlCrawler(serv, pendingChan, stopChan, &wg, uri.Host)
+	processorService := internal.NewHtmlCrawler(serv, pendingChan, &wg, uri.Host)
 
 	wg.Add(1)
 
-	go pendingService.Run(&wg, uri.String(), internal.ROOT)
+	go processorService.Run(&wg, uri.String(), internal.ROOT)
 
 	cs := make(chan os.Signal, 1)
 	signal.Notify(cs, os.Interrupt)
 	go func() {
 		<-cs
 		log.Println("Goodbye")
+		fmt.Println(processorService.Response())
+		if *profileActive {
+			pprof.StopCPUProfile()
+		}
 		os.Exit(1)
 	}()
 
 	wg.Wait()
+	resp := processorService.Response()
+	fmt.Println(resp.(string))
 }

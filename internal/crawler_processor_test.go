@@ -2,6 +2,7 @@ package internal
 
 import (
 	"github.com/stretchr/testify/assert"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -15,6 +16,7 @@ func Test_htmlCrawlerProcessor_Run(t *testing.T) {
 	tests := []struct {
 		name string
 		args args
+		want string
 	}{
 		{
 			name: "Basic test 5 urls",
@@ -22,6 +24,32 @@ func Test_htmlCrawlerProcessor_Run(t *testing.T) {
 				url:      "http://www.test1.com",
 				ancestor: "ROOT",
 			},
+			want: ` https://test1.com
+   https://test1.com/one
+   https://test1.com/two
+   https://test1.com/three
+   https://test1.com/four
+ https://test1.com/one
+   https://test1.com/one
+   https://test1.com/two
+   https://test1.com/three
+   https://test1.com/four
+ https://test1.com/two
+   https://test1.com/one
+   https://test1.com/two
+   https://test1.com/three
+   https://test1.com/four
+ https://test1.com/three
+   https://test1.com/one
+   https://test1.com/two
+   https://test1.com/three
+   https://test1.com/four
+ https://test1.com/four
+   https://test1.com/one
+   https://test1.com/two
+   https://test1.com/three
+   https://test1.com/four
+`,
 		},
 	}
 	for _, tt := range tests {
@@ -33,14 +61,15 @@ func Test_htmlCrawlerProcessor_Run(t *testing.T) {
 			p := NewHtmlCrawler(
 				fp,
 				make(chan HtmlCrawlingPendingAddress),
-				make(chan int),
 				&wg,
 				"www.test1.com",
 			)
 
 			p.Run(&wgOuter, tt.args.url, tt.args.ancestor)
+			res := p.Response()
 
 			assert.Equal(t, 5, len(p.VisitedUrls()))
+			assert.ElementsMatch(t, strings.Split(res.(string), "\n"), strings.Split(tt.want, "\n"))
 		})
 	}
 }
