@@ -31,7 +31,7 @@ func TestWebContentExtract_Run(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := &WebContentExtract{}
+			c := NewWebContentExtrat()
 			gotRealURL, gotData, err := c.Run(tt.args.uri)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("Run() error = %v, wantErr %v", err, tt.wantErr)

@@ -41,7 +41,7 @@ func main() {
 
 	wg.Add(1)
 
-	go pendingService.Execute(&wg, uri.String(), internal.ROOT)
+	go pendingService.Run(&wg, uri.String(), internal.ROOT)
 
 	cs := make(chan os.Signal, 1)
 	signal.Notify(cs, os.Interrupt)

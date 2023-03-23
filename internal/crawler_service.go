@@ -1,7 +1,6 @@
 package internal
 
 import (
-	"errors"
 	"golang.org/x/net/html"
 	"net/url"
 	"strings"
@@ -9,10 +8,6 @@ import (
 
 const (
 	ROOT = "ROOT"
-)
-
-var (
-	ErrorInRequest = errors.New("error in the request")
 )
 
 type Crawler interface {
