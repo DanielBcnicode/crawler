@@ -1,5 +1,5 @@
 # Crawler
-## ParserDigital technical test
+## PD technical test
 
 The idea is to create a Crawler to visit only one subdomain.
 This implementation is a basic one based on a CLI app.
